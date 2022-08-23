@@ -4,6 +4,8 @@
 
 "use strict";
 
+const { transpileMethodToRust } = require('./transpile-rust.js');
+
 const fs = require ('fs')
     , log = require ('ololog').unlimited
     , _ = require ('ansicolor').nice
@@ -409,6 +411,315 @@ class Transpiler {
         ])
     }
 
+    getRustRegexes () {
+
+        return [
+            [ /Array\.isArray\s*\(([^\)]+)\)/g, 'matches!($1, Value::Array(_))' ],
+            [ /([^\(\s]+)\s+instanceof\s+String/g, 'matches!($1, Value::String(_))' ],
+            [ /([^\(\s]+)\s+instanceof\s+([^\)\s]+)/g, 'matches!($1, Value::$2(_))' ],
+
+            [ /typeof\s+([^\s\[]+)(?:\s|\[(.+?)\])\s+\=\=\=?\s+\'undefined\'/g, '$1.get($2).is_undefined()' ],
+            [ /typeof\s+([^\s\[]+)(?:\s|\[(.+?)\])\s+\!\=\=?\s+\'undefined\'/g, '!$1.get($2).is_undefined()' ],
+            [ /typeof\s+([^\s]+)\s+\=\=\=?\s+\'undefined\'/g, '$1.is_undefined()' ],
+            [ /typeof\s+([^\s]+)\s+\!\=\=?\s+\'undefined\'/g, '!$1.is_undefined()' ],
+            [ /typeof\s+(.+?)\s+\=\=\=?\s+\'undefined\'/g, '$1.is_undefined()' ],
+            [ /typeof\s+(.+?)\s+\!\=\=?\s+\'undefined\'/g, '!$1.is_undefined()' ],
+
+            [ /typeof\s+([^\s\[]+)(?:\s|\[(.+?)\])\s+\=\=\=?\s+\'number\'/g, "$1.get($2).is_number()" ],
+            [ /typeof\s+([^\s\[]+)(?:\s|\[(.+?)\])\s+\!\=\=?\s+\'number\'/g, "!$1.get($2).is_number()" ],
+            [ /typeof\s+([^\s]+)\s+\=\=\=?\s+\'number\'/g, "$1.is_number()" ],
+            [ /typeof\s+([^\s]+)\s+\!\=\=?\s+\'number\'/g, "!$1.is_number()" ],
+
+            [ /([^\s\[]+)(?:\s|\[(.+?)\])\s+\=\=\=?\s+undefined/g, '$1.get($2).is_undefined()' ],
+            [ /([^\s\[]+)(?:\s|\[(.+?)\])\s+\!\=\=?\s+undefined/g, '!$1.get($2).is_undefined()' ],
+            [ /([^\s]+)\s+\=\=\=?\s+undefined/g, '$1.is_undefined()' ],
+            [ /([^\s]+)\s+\!\=\=?\s+undefined/g, '!$1.is_undefined()' ],
+            [ /(.+?)\s+\=\=\=?\s+undefined/g, '$1.is_undefined()' ],
+            [ /(.+?)\s+\!\=\=?\s+undefined/g, '!$1.is_undefined()' ],
+            //
+            // too broad, have to rewrite these cause they don't work
+            //
+            // [ /([^\s]+)\s+\=\=\=?\s+true/g, 'isinstance($1, bool) and ($1 is True)' ],
+            // [ /([^\s]+)\s+\!\=\=?\s+true/g, 'isinstance($1, bool) and ($1 is not True)' ],
+            // [ /([^\s]+)\s+\=\=\=?\s+false/g, 'isinstance($1, bool) and ($1 is False)' ],
+            // [ /([^\s]+)\s+\!\=\=?\s+false/g, 'isinstance($1, bool) and ($1 is not False)' ],
+
+            [ /typeof\s+([^\s\[]+)(?:\s|\[(.+?)\])\s+\=\=\=?\s+\'string\'/g, 'matches!($1.get($2), Some(Value::String(_)))' ],
+            [ /typeof\s+([^\s\[]+)(?:\s|\[(.+?)\])\s+\!\=\=?\s+\'string\'/g, '!matches!($1.get($2), Some(Value::String(_)))' ],
+            [ /typeof\s+([^\s]+)\s+\=\=\=?\s+\'string\'/g, 'matches!($1, Value::String(_))' ],
+            [ /typeof\s+([^\s]+)\s+\!\=\=?\s+\'string\'/g, '!matches!($1, Value::String(_))' ],
+
+            [ /typeof\s+([^\s\[]+)(?:\s|\[(.+?)\])\s+\=\=\=?\s+\'object\'/g, '$1.get($2).is_string()' ],
+            [ /typeof\s+([^\s\[]+)(?:\s|\[(.+?)\])\s+\!\=\=?\s+\'object\'/g, '!$1.get($2).is_string()' ],
+            [ /typeof\s+([^\s]+)\s+\=\=\=?\s+\'object\'/g, '$1.is_object()' ],
+            [ /typeof\s+([^\s]+)\s+\!\=\=?\s+\'object\'/g, '!$1.is_object()' ],
+
+            // [ /undefined/g, 'JSON_NULL' ], // XXX
+            [ /\=\=\=?/g, '==' ],
+            [ /\!\=\=?/g, '!=' ],
+            [ /this\.stringToBinary\s*\((.*)\)/g, '$1' ],
+            // [ /\.shift\s*\(\)/g, '.pop(0)' ], // XXX
+            [ /Number\.MAX_SAFE_INTEGER/g, 'i64::MAX'],
+            [ /function\s*(\w+\s*\([^)]+\))\s*{/g, 'pub fn $1:'], // XXX
+            // [ /\.replaceAll\s*\(([^)]+)\)/g, '.replace($1)' ], // still not a part of the standard
+            [ /assert\s*\((.+)\);/g, 'assert!($1)'],
+            [ /Promise\.all\s*\(([^\)]+)\)/g, 'asyncio.gather(*$1)' ],
+            [ /Precise\.stringAdd\s/g, 'Precise::string_add' ],
+            [ /Precise\.stringMul\s/g, 'Precise::string_mul' ],
+            [ /Precise\.stringDiv\s/g, 'Precise::string_div' ],
+            [ /Precise\.stringSub\s/g, 'Precise::string_sub' ],
+            [ /Precise\.stringAbs\s/g, 'Precise::string_abs' ],
+            [ /Precise\.stringNeg\s/g, 'Precise::string_neg' ],
+            [ /Precise\.stringMod\s/g, 'Precise::string_mod' ],
+            [ /Precise\.stringEquals\s/g, 'Precise::string_equals' ],
+            [ /Precise\.stringEq\s/g, 'Precise::string_eq' ],
+            [ /Precise\.stringMin\s/g, 'Precise::string_min' ],
+            [ /Precise\.stringMax\s/g, 'Precise::string_max' ],
+            [ /Precise\.stringGt\s/g, 'Precise::string_gt' ],
+            [ /Precise\.stringGe\s/g, 'Precise::string_ge' ],
+            [ /Precise\.stringLt\s/g, 'Precise::string_lt' ],
+            [ /Precise\.stringLe\s/g, 'Precise::string_le' ],
+            [ /\.padEnd\s/g, '.ljust'], // XXX
+            [ /\.padStart\s/g, '.rjust' ], // XXX
+
+        // insert common regexes in the middle (critical)
+        ].concat (this.getCommonRegexes ()).concat ([
+
+            // [ /this\.urlencode\s/g, '_urlencode.urlencode ' ], // use self.urlencode instead
+            [ /this\./g, 'self.' ],
+            [ /([^a-zA-Z\'])this([^a-zA-Z])/g, '$1self$2' ],
+            [ /\[\s*([^\]]+)\s\]\s=/g, '$1 =' ],
+            [ /(^|[^a-zA-Z0-9_])(?:let|var)\s\[\s*([^\]]+)\s\]/g, 'let mut $1$2' ],
+            [ /(^|[^a-zA-Z0-9_])(?:let|var)\s\{\s*([^\}]+)\s\}\s\=\s([^\;]+)/g, 'let mut $1$2 = (lambda $2: ($2))(**$3)' ],
+            [ /(^|[^a-zA-Z0-9_])(?:let|var)\s/g, 'let mut$1' ],
+            [ /(^|[^a-zA-Z0-9_])(?:const)\s\[\s*([^\]]+)\s\]/g, 'let$1$2' ],
+            [ /(^|[^a-zA-Z0-9_])(?:const)\s\{\s*([^\}]+)\s\}\s\=\s([^\;]+)/g, 'let$1$2 = (lambda $2: ($2))(**$3)' ],
+            [ /(^|[^a-zA-Z0-9_])(?:const)\s/g, 'let$1' ],
+            [ /Object\.keys\s*\((.*)\)\.length/g, '$1' ],
+            [ /Object\.keys\s*\((.*)\)/g, '$1.keys()' ],
+            [ /Object\.values\s*\((.*)\)/g, '$1.values()' ],
+            [ /\[([^\]]+)\]\.join\s*\(([^\)]+)\)/g, "$2.join([$1])" ],
+            [ /hash \(([^,]+)\, \'(sha[0-9])\'/g, "hash($1, '$2'" ],
+            [ /hmac \(([^,]+)\, ([^,]+)\, \'(md5)\'/g, 'hmac($1, $2, hashlib.$3' ],
+            [ /hmac \(([^,]+)\, ([^,]+)\, \'(sha[0-9]+)\'/g, 'hmac($1, $2, hashlib.$3' ],
+            [ /throw new ([\S]+) \((.*)\)/g, 'panic!(r#"$1($2)"#)'],
+            [ /throw ([\S]+)/g, 'panic!(r#"$1"#)'],
+            [ /try {/g, ''],
+            [ /\}\s+catch \(([\S]+)\) {/g, ''],
+            [ /([\s\(])extend(\s)/g, '$1self.extend$2' ],
+            // [ /\} else if/g, 'elif' ],
+            // [ /else if/g, 'elif' ],
+            [ /if\s+\((.*)\)\s+\{/g, 'if $1 {' ],
+            // [ /if\s+\((.*)\)\s*[\n]/g, "if $1:\n" ], // XXX
+            // [ /\}\s*else\s*\{/g, 'else:' ],
+            // [ /else\s*[\n]/g, "else:\n" ], // XXX
+            [ /for\s+\(([a-zA-Z0-9_]+)\s*=\s*([^\;\s]+\s*)\;[^\<\>\=]+(?:\<=|\>=|<|>)\s*(.*)\.length\s*\;[^\)]+\)\s*{/g, 'for $1 in range($2, len($3)):'],
+            [ /for\s+\(([a-zA-Z0-9_]+)\s*=\s*([^\;\s]+\s*)\;[^\<\>\=]+(?:\<=|\>=|<|>)\s*(.*)\s*\;[^\)]+\)\s*{/g, 'for $1 in range($2, $3):'],
+            // [ /\s\|\|\s/g, ' or ' ],
+            // [ /\s\&\&\s/g, ' and ' ],
+            // [ /\!([^\s\='"])/g, 'not $1'],
+            [ /\.push\s*\(([\s\S]+?)\);/g, '.push($1);' ],
+            // [ /^(\s*}\s*$)+/gm, '' ],
+            [ /\;(\s+?\/\/.+?)/g, '$1' ],
+            [ /\.toUpperCase\s*/g, '.to_uppercase' ],
+            [ /\.toLowerCase\s*/g, '.to_lowercase' ],
+            [ /(\b)String(\b)/g, '$1str$2'],
+            [ /JSON\.stringify\s*/g, 'serde_json::stringify' ],
+            [ /JSON\.parse\s*/g, "json.loads" ],
+            // [ /([^\(\s]+)\.includes\s+\(([^\)]+)\)/g, '$2 in $1' ],
+            // [ /\'%([^\']+)\'\.sprintf\s*\(([^\)]+)\)/g, "'{:$1}'.format($2)" ],
+            [ /([^\s]+)\.toFixed\s*\(([0-9]+)\)/g, "format($1, '.$2f')" ],
+            [ /([^\s]+)\.toFixed\s*\(([^\)]+)\)/g, "format($1, '.' + str($2) + 'f')" ],
+            [ /parseFloat\s*/g, 'float'],
+            [ /parseInt\s*/g, 'int'],
+            [ /self\[([^\]+]+)\]/g, 'getattr(self, $1)' ],
+            [ /Math\.floor\s*\(([^\)]+)\)/g, 'int(math.floor($1))' ],
+            [ /Math\.abs\s*\(([^\)]+)\)/g, 'abs($1)' ],
+            [ /Math\.pow\s*\(([^\)]+)\)/g, 'math.pow($1)' ],
+            [ /Math\.round\s*\(([^\)]+)\)/g, '$1.round().into()' ],
+            [ /Math\.ceil\s*\(([^\)]+)\)/g, '$1.ceil().into()' ],
+            [ /Math\.log/g, 'math.log' ],
+            [ /([a-zA-Z0-9_\.]*\([^\)]+\)|[^\s]+)\s+\?\s*([^\:]+)\s+\:\s*([^\n]+),/g, 'if $1 { $2 } else { return $3 },'],
+            [ /([a-zA-Z0-9_\.]*\([^\)]+\)|[^\s]+)\s+\?\s*([^\:]+)\s+\:\s*([^\n]+)/g, 'if $1 { $2 } else { return $3 };'],
+            [ /([^\s]+)\.slice \(([^\,\)]+)\,\s?([^\)]+)\)/g, '$1[$2:$3]' ],
+            [ /([^\s]+)\.slice \(([^\)\:]+)\)/g, '$1[$2:]' ],
+            [ /([^\s(:]+)\.length/g, '$1.len()' ],
+            [ /(^|\s)\/\//g, '$1//' ],
+            [ /([^\n\s]) #/g, '$1;  //' ],   // PEP8 E261
+            [ /\.indexOf/g, '.find'],
+            [ /(\s|\()true/g, '$1VALUE_TRUE'],
+            [ /(\s|\()false/g, '$1VALUE_FALSE'],
+            [ /(\s|\()type/g, '$1r#type'],
+            [ /([^\s]+\s*\(\))\.toString\s+\(\)/g, '$1.to_string()' ],
+            [ /([^\s]+)\.toString \(\)/g, '$1.to_string()' ],
+            [ /([^\s]+)\.join\s*\(\s*([^\)\[\]]+?)\s*\)/g, '$2.join($1)' ],
+            [ /Math\.(max|min)\s/g, 'std::cmp::$1' ],
+            [ / = new /g, ' = ' ], // python does not have a 'new' keyword
+            [ /console\.log\s/g, 'println!' ],
+            [ /process\.exit\s+/g, 'sys.exit' ],
+            [ /(while \(.*\)) {/, '$1\:' ], // While loops replace bracket with :
+            [ /([^:+=\/\*\s-]+) \(/g, '$1(' ], // PEP8 E225 remove whitespaces before left ( round bracket
+            [ /\sand\(/g, ' && (' ],
+            [ /\sor\(/g, ' || (' ],
+            [ /\snot\(/g, ' ! (' ],
+            [ /\[ /g, '[' ],              // PEP8 E201 remove whitespaces after left [ square bracket
+            [ /\{ /g, '{' ],              // PEP8 E201 remove whitespaces after left { bracket
+            [ /(?<=[^\s#]) \]/g, ']' ],    // PEP8 E202 remove whitespaces before right ] square bracket
+            [ /(?<=[^\s#]) \}/g, '}' ],    // PEP8 E202 remove whitespaces before right } bracket
+            [ /([^a-z])(elif|if|or|else)\(/g, '$1$2 \(' ], // a correction for PEP8 E225 side-effect for compound and ternary conditionals
+            [ /\!\=\sTrue/g, '== false' ], // a correction for PEP8 E712, it likes "is not True", not "!= True"
+            [ /\=\=\sTrue/g, '== true' ], // a correction for PEP8 E712, it likes "is True", not "== True"
+            [ /\sdelete\s/g, ' del ' ],
+            [ /'/g, '"' ],
+            [ /(?<!#.+)null/, 'JSON_NULL' ],
+            [ /, undefined/, ', VALUE_UNDEFINED' ],
+
+            [ /\/\*\*/, '///' ], // Doc strings
+            [ / \*\//, '///' ], // Doc strings
+            [ /\[([^\[\]]*)\]\{@link (.*)\}/g, '' ], // docstring item with link
+            [ /\s+\* @method/g, '' ], // docstring @method
+            [ /(\s+) \* @description (.*)/g, '' ], // docstring description
+            [ /\s+\* @name .*/g, '' ], // docstring @name
+            [ /(\s+) \* @see( .*)/g, '' ], // docstring @see
+            [ /(\s+ \* @(param|returns) {[^}]*)string([^}]*}.*)/g, '' ], // docstring type conversion
+            [ /(\s+ \* @(param|returns) {[^}]*)object([^}]*}.*)/g, '' ], // doctstrubg type conversion
+            [ /(\s+) \* @returns ([^\{])/g, '' ], // docstring return
+            [ /(\s+) \* @ignore.*/g, '' ], // docstring return
+            [ /(\s+) \* \* .*/g, '' ], // docstring return
+            [ /(\s+) \* @returns \{(.+)\}/g, '' ], // docstring return
+            [ /(\s+ \* @param \{[\]\[\|a-zA-Z]+\} )([a-zA-Z0-9_-]+)\.([a-zA-Z0-9_-]+) (.*)/g, '' ], // docstring params.anything
+            [ /(\s+) \* @([a-z]+) \{([\]\[a-zA-Z\|]+)\} ([a-zA-Z0-9_\-\.\[\]\']+)/g, '' ], // docstring param
+
+            [ /(\s)+await(\s)+(.*);/g, '$1$3.await;' ],
+
+            [ /(safe_string\([^,]+,)([^,)]+)\),/g, '$1$2.into(), VALUE_UNDEFINED),'],
+            [ /(safe_integer\([^,]+,)([^,)]+)\),/g, '$1$2.into(), VALUE_UNDEFINED),'],
+            [ /(safe_number\([^,]+,)([^,)]+)\),/g, '$1$2.into(), VALUE_UNDEFINED),'],
+            [ /(safe_value\([^,]+,)([^,)]+)\),/g, '$1$2.into(), VALUE_UNDEFINED),'],
+
+            [ /(safe_string\([^,]+,)([^,)]+)\);/g, '$1$2.into(), VALUE_UNDEFINED);'],
+            [ /(safe_integer\([^,]+,)([^,)]+)\);/g, '$1$2.into(), VALUE_UNDEFINED);'],
+            [ /(safe_number\([^,]+,)([^,)]+)\);/g, '$1$2.into(), VALUE_UNDEFINED);'],
+            [ /(safe_value\([^,]+,)([^,)]+)\);/g, '$1$2.into(), VALUE_UNDEFINED);'],
+
+            [ /(safe_currency_code\([^)]+)\);/g, '$1, VALUE_UNDEFINED);'],
+
+            [ /(safe_string\([^,]+,)([^,)]+)\)\);/g, '$1$2.into(), VALUE_UNDEFINED));'],
+            [ /(safe_integer\([^,]+,)([^,)]+)\)\);/g, '$1$2.into(), VALUE_UNDEFINED));'],
+            [ /(safe_number\([^,]+,)([^,)]+)\)\);/g, '$1$2.into(), VALUE_UNDEFINED));'],
+            [ /(safe_value\([^,]+,)([^,)]+)\)\);/g, '$1$2.into(), VALUE_UNDEFINED));'],
+
+            [ /(safe_string\([^,]+,)([^,)]+)\) ==/g, '$1$2.into(), VALUE_UNDEFINED) =='],
+            [ /(safe_integer\([^,]+,)([^,)]+)\) ==/g, '$1$2.into(), VALUE_UNDEFINED) =='],
+            [ /(safe_number\([^,]+,)([^,)]+)\) ==/g, '$1$2.into(), VALUE_UNDEFINED) =='],
+            [ /(safe_value\([^,]+,)([^,)]+)\) ==/g, '$1$2.into(), VALUE_UNDEFINED) =='],
+
+            [ /(safe_string\([^,]+,)([^,)]+)\)\./g, '$1$2.into(), VALUE_UNDEFINED).'],
+            [ /(safe_integer\([^,]+,)([^,)]+)\)\./g, '$1$2.into(), VALUE_UNDEFINED).'],
+            [ /(safe_number\([^,]+,)([^,)]+)\)\./g, '$1$2.into(), VALUE_UNDEFINED).'],
+            [ /(safe_value\([^,]+,)([^,)]+)\)\./g, '$1$2.into(), VALUE_UNDEFINED).'],
+
+            [ /(safe_string\([^,]+,)([^,)]+)\)}/g, '$1$2.into(), VALUE_UNDEFINED)}'],
+            [ /(safe_integer\([^,]+,)([^,)]+)\)}/g, '$1$2.into(), VALUE_UNDEFINED)}'],
+            [ /(safe_number\([^,]+,)([^,)]+)\)}/g, '$1$2.into(), VALUE_UNDEFINED)}'],
+            [ /(safe_value\([^,]+,)([^,)]+)\)}/g, '$1$2.into(), VALUE_UNDEFINED)}'],
+
+            [ /(safe_string\([^,]+,)([^,)]+)(,.*)\);/g, '$1$2.into()$3.into());'],
+            [ /(safe_integer\([^,]+,)([^,)]+)(,.*)\);/g, '$1$2.into()$3.into());'],
+            [ /(safe_number\([^,]+,)([^,)]+)(,.*)\);/g, '$1$2.into()$3.into());'],
+            [ /(safe_value\([^,]+,)([^,)]+)(,.*)\);/g, '$1$2.into()$3.into());'],
+
+            [ /(safe_string\([^,]+,)([^,)]+)(,.*)\) {/g, '$1$2.into()$3.into()) {'],
+            [ /(safe_integer\([^,]+,)([^,)]+)(,.*)\) {/g, '$1$2.into()$3.into()) {'],
+            [ /(safe_number\([^,]+,)([^,)]+)(,.*)\) {/g, '$1$2.into()$3.into()) {'],
+            [ /(safe_value\([^,]+,)([^,)]+)(,.*)\) {/g, '$1$2.into()$3.into()) {'],
+
+            // [ /\.create_order\(([^),]+)(,[^),]+)(,[^),]+)(,[^),]+)(,[^),]+)(,[^),]+)(,[^),]+)\)/g, '.create_order($1.into()'],
+            [ /\.create_order\(([^),]+)(,[^),]+)(,[^),]+)(,[^),]+)(,[^),]+)/g, '.create_order($1.into()$2.into()$3.into()$4.into()$5.into()'],
+
+            [ /(filter_by_symbol_since_limit\([^,)]+,[^,)]+,[^,)]+,[^,)]+)(,[^,)]+)\);/g, '$1$2.into());'],
+            [ /(filter_by_currency_since_limit\([^,)]+,[^,)]+,[^,)]+,[^,)]+)(,[^,)]+)\);/g, '$1$2.into());'],
+            [ /(filter_by_symbol_since_limit\([^,)]+,[^,)]+,[^,)]+,[^,)]+)\);/g, '$1, VALUE_UNDEFINED);'],
+
+            [ /fetch_partial_balance\("([^"]+)"/g, 'fetch_partial_balance("$1".into()'],
+
+            [ /oldNumber = self\.number(\s)/, 'oldNumber = self.number;$1'],
+            [ /objects = self.to_array\(objects\)(\s)/, 'objects = self.to_array(objects);$1'],
+            [ /\|\| !values/, '|| !values.into()'],
+
+
+            [ /Precise::string_gt\(([^,]+), "([^"]+)"\)/g, 'Precise::string_gt($1, "$2".into())'],
+            [ /Precise::string_mul\(([^,]+), "([^"]+)"\)/g, 'Precise::string_gt($1, "$2".into())'],
+            [ /Precise::string_equals\(([^,]+), "([^"]+)"\)/g, 'Precise::string_gt($1, "$2".into())'],
+            [ /Precise::string_eq\(([^,]+), "([^"]+)"\)/g, 'Precise::string_gt($1, "$2".into())'],
+            [ /Precise::string_div\(([^,]+), "([^"]+)"\)/g, 'Precise::string_div($1, "$2".into())'],
+            [ /Precise::string_div\("([^"]+)", ([^,]+)\)/g, 'Precise::string_div("$1".into(), $2)'],
+            [ /Precise::string_div\(([^,]+), ([^,)]+)\);/g, 'Precise::string_div($1, $2, None);'],
+
+            [ /Precise::string_mul\((.*), "(\d+)"\);/g, 'Precise::string_mul($1, "$2".into());'],
+
+            [ /\.edit_limit_order\(([^,]+), ([^,]+), "(\w+)", ([^;]+)/, '.edit_limit_order($1, $2, "$3".into(), $4'],
+            [ /\.edit_order\(([^,]+), ([^,]+), "(\w+)", ([^;]+)/, '.edit_order($1, $2, "$3".into(), $4'],
+
+            [ /\.filter_by_array\(([^,]+), "(\w+)", ([^,)]+)\)/, '.filter_by_array($1, "$2".into(), $3, VALUE_UNDEFINED)'],
+            [ /\.filter_by_array\(([^,]+), "(\w+)", ([^,)]+), ([^,)]+)\)/, '.filter_by_array($1, "$2".into(), $3, $4)'],
+
+            [ /\.get\(([^)]+)\)/g, '.get($1.into())' ],
+            [ /order\["([^"]+)"\]/g, 'order["$1".into()]' ],
+
+            [ /!\(([^ ]+) in (.*)\) {/g, '!$2.contains_key($1.into()) {' ],
+            [ /if ([^ ]+) in (.*) {/g, 'if $2.contains_key($1.into()) {' ],
+
+            [ /safe_market\(([^,]+)\)/g, 'safe_market($1, VALUE_UNDEFINED, VALUE_UNDEFINED)'],
+            [ /safe_market\(\)/g, 'safe_market(VALUE_UNDEFINED, VALUE_UNDEFINED, VALUE_UNDEFINED)'],
+            [ /\[i\]/g, '.get(i.into()).unwrap()'],
+            [ /\[(\d+)\]/g, '.get($1.into()).unwrap()'],
+            [ /, {}\);/g, ', VALUE_EMPTY_OBJECT);'],
+            [ /, \[\]\);/g, ', VALUE_EMPTY_ARRAY);'],
+            [ /, \[\]\),/g, ', VALUE_EMPTY_ARRAY),'],
+            [ /= \[\];/g, '= VALUE_EMPTY_ARRAY.clone();'],
+
+            [ /\.extend\({(.*)\);/g, '.extend(Value::Json(json!({$1)));'],
+            [ /\.extend\(([^,]+), {(.*);/g, '.extend($1, Value::Json(json!({$2));'],
+            // [ /\.implode_params\(([^,]+), {(.*)\);/g, '.implde_params($1, Value::Json(json!({$1)));'],
+
+            [ /(\.deep_extend\(.*, ){/g, '$1json!({'],
+            [ /    }, /g, '    }), '],
+
+            [ /for let mut\((\w+)\s*=\s*([^;]+);.*<\s*([^;]+);\s*\w+\+\+\)\s*{/g, 'for $1 in $2..$3 {' ],
+            [ /for let mut\((\w+)\s*=\s*([^;]+);.*<=\s*([^;]+);\s*\w+\+\+\)\s*{/g, 'for $1 in $2..=$3 {' ],
+            [ /let\s*(\w+)\s*= \[\];/g, 'let mut $1 = vec![];' ],
+
+            [ /, type, /g, ', r#type, ' ],
+
+            // [ /},/g, '}),'],
+
+            [ /  return {/g, '  return Value::Json(json!({'],
+            [ / = {};/g, ' = Value::Json(json!({}));'],
+            [ / = {/g, ' = Value::Json(json!({'],
+            [ /\b, {/g, ', Value::Json(json!({'],
+            [ /  }\);/g, '  })));'],
+            [ /  };/g, '  }));'],
+
+            [ /( = "[^"]*");/g, '$1.into();'],
+            [ /\) \/\//g, '); //'],
+
+            // [ /\/\*\*/, '///' ], // Doc strings
+            // [ / \*\//, '///' ], // Doc strings
+            // [ /\[([^\[\]]*)\]\{@link (.*)\}/g, '`$1 <$2>`' ], // docstring item with link
+            // [ /\s+\* @method/g, '' ], // docstring @method
+            // [ /(\s+) \* @description (.*)/g, '$1/// $2' ], // docstring description
+            // [ /\s+\* @name .*/g, '' ], // docstring @name
+            // [ /(\s+) \* @see( .*)/g, '$1/// see$2' ], // docstring @see
+            // [ /(\s+ \* @(param|returns) {[^}]*)string([^}]*}.*)/g, '$1/// str$3' ], // docstring type conversion
+            // [ /(\s+ \* @(param|returns) {[^}]*)object([^}]*}.*)/g, '$1/// dict$3' ], // doctstrubg type conversion
+            // [ /(\s+) \* @returns ([^\{])/g, '///$1 :returns: $2' ], // docstring return
+            // [ /(\s+) \* @returns \{(.+)\}/g, '///$1 :returns $2:' ], // docstring return
+            // [ /(\s+ \* @param \{[\]\[\|a-zA-Z]+\} )([a-zA-Z0-9_-]+)\.([a-zA-Z0-9_-]+) (.*)/g, '/// $1$2[\'$3\'] $4' ], // docstring params.anything
+            // [ /(\s+) \* @([a-z]+) \{([\]\[a-zA-Z\|]+)\} ([a-zA-Z0-9_\-\.\[\]\']+)/g, '/// $1:$2 $3 $4:' ], // docstring param
+        ])
+    }
+
     getPython2Regexes () {
         return [
             [ /.+asyncio\.gather.+\n/g, '' ], // remove line entirely
@@ -801,6 +1112,47 @@ class Transpiler {
         }
     }
 
+    createRustClass (className, baseClass, body, methods, async = false) {
+
+        let bodyAsString = body.join ("\n")
+
+        const {
+            imports,
+            asyncioImports,
+            libraries,
+            errorImports,
+            precisionImports
+        } = this.createPythonImports(baseClass, bodyAsString, async)
+
+        let header = [
+            "",
+            "// PLEASE DO NOT EDIT THIS FILE, IT IS GENERATED AND WILL BE OVERWRITTEN:",
+            "// https://github.com/ccxt/ccxt/blob/master/CONTRIBUTING.md#how-to-contribute-code",
+            "",
+        ]
+
+        // let header = this.createPythonClassHeader (imports, bodyAsString)
+
+        // header = header.concat (asyncioImports, libraries, errorImports, precisionImports)
+
+        methods = methods.concat (this.getPythonBaseMethods ())
+
+        for (let method of methods) {
+            const regex = new RegExp ('self\\.(' + method + ')([^a-zA-Z0-9_])', 'g')
+            bodyAsString = bodyAsString.replace (regex,
+                (match, p1, p2) => ('self.' + unCamelCase (p1) + p2))
+        }
+
+        header.push ("\n\n" + this.createPythonClassDeclaration (className, baseClass))
+
+        const footer = [
+            '', // footer (last empty line)
+        ]
+
+        const result = header.join ("\n") + "\n" + bodyAsString + "\n" + footer.join ('\n')
+        return result
+    }
+
     // ========================================================================
     // exchange capabilities ordering
 
@@ -947,6 +1299,44 @@ class Transpiler {
         }
 
         return python3Body
+    }
+
+    // ------------------------------------------------------------------------
+
+    transpileJavaScriptToRust ({ js, className, variables, removeEmptyLines }) {
+
+        // transpile JS → Rust
+        let rustBody = this.regexAll (js, this.getRustRegexes ())
+
+        if (removeEmptyLines) {
+            rustBody = rustBody.replace (/$\s*$/gm, '')
+        }
+
+        const strippedRustBodyWithoutComments = rustBody.replace (/^[\s]+\/\/\/.+$/gm, '')
+
+        // if (!strippedPython3BodyWithoutComments.match(/[^\s]/)) {
+        //     python3Body += '\n        pass'
+        // }
+
+        rustBody = rustBody.replace (/\'([абвгдеёжзийклмнопрстуфхцчшщъыьэюя服务端忙碌]+)\'/gm, "u'$1'")
+
+        // special case for Python OrderedDicts
+        let orderedDictRegex = /\.ordered\s+\(\{([^\}]+)\}\)/g
+        let orderedDictMatches = undefined
+        while (orderedDictMatches = orderedDictRegex.exec (rustBody)) {
+            let replaced = orderedDictMatches[1].replace (/^(\s+)([^\:]+)\:\s*([^\,]+)\,$/gm, '$1($2, $3),')
+            rustBody = rustBody.replace (orderedDictRegex, '\.ordered([' + replaced + '])')
+        }
+
+        // snake case function names
+        rustBody = rustBody.replace (/fn (\w+)/g, (match, group1) => 'fn ' + unCamelCase (group1))
+
+        // special case for Python super
+        // if (className) {
+        //     python3Body = python3Body.replace (/super\./g, 'super(' + className + ', self).')
+        // }
+
+        return rustBody
     }
 
     // ------------------------------------------------------------------------
@@ -1123,6 +1513,7 @@ class Transpiler {
             python3,
             php,
             phpAsync,
+            rust,
             methodNames
         } = this.transpileMethodsToAllLanguages (className, methods)
         // altogether in PHP, async PHP, Python sync and async
@@ -1133,6 +1524,7 @@ class Transpiler {
             python3:      this.createPythonClass (className, baseClass, python3,  methodNames, async),
             php:          this.createPHPClass    (className, baseClass, php,      methodNames, sync),
             phpAsync:     this.createPHPClass    (className, baseClass, phpAsync, methodNames, async),
+            rust:     this.createRustClass    (className, baseClass, rust, methodNames, async),
             className,
             baseClass,
         }
@@ -1146,9 +1538,10 @@ class Transpiler {
 
         try {
 
-            const { python2Folder, python3Folder, phpFolder, phpAsyncFolder } = options
+            const { python2Folder, python3Folder, phpFolder, phpAsyncFolder, rustFolder } = options
             const pythonFilename = filename.replace ('.js', '.py')
             const phpFilename = filename.replace ('.js', '.php')
+            const rustFilename = filename.replace ('.js', '.rs')
 
             const jsPath = jsFolder + filename
 
@@ -1165,18 +1558,21 @@ class Transpiler {
             const python3Path  = python3Folder  ? (python3Folder  + pythonFilename) : undefined
             const phpPath      = phpFolder      ? (phpFolder      + phpFilename)    : undefined
             const phpAsyncPath = phpAsyncFolder ? (phpAsyncFolder + phpFilename)    : undefined
+            const rustPath = rustFolder ? (rustFolder + rustFilename) : undefined
 
             const python2Mtime  = python2Folder  ? (fs.existsSync (python2Path)  ? fs.statSync (python2Path).mtime.getTime ()  : 0) : undefined
             const python3Mtime  = python3Path    ? (fs.existsSync (python3Path)  ? fs.statSync (python3Path).mtime.getTime ()  : 0) : undefined
             const phpAsyncMtime = phpAsyncFolder ? (fs.existsSync (phpAsyncPath) ? fs.statSync (phpAsyncPath).mtime.getTime () : 0) : undefined
             const phpMtime      = phpPath        ? (fs.existsSync (phpPath)      ? fs.statSync (phpPath).mtime.getTime ()      : 0) : undefined
+            const rustMtime      = rustPath        ? (fs.existsSync (rustPath)      ? fs.statSync (rustPath).mtime.getTime ()      : 0) : undefined
 
             if (force ||
                 (python3Folder  && (jsMtime > python3Mtime))  ||
                 (phpFolder      && (jsMtime > phpMtime))      ||
                 (phpAsyncFolder && (jsMtime > phpAsyncMtime)) ||
-                (python2Folder  && (jsMtime > python2Mtime))) {
-                const { python2, python3, php, phpAsync, className, baseClass } = this.transpileClass (contents)
+                (python2Folder  && (jsMtime > python2Mtime)) ||
+                (rustFolder && (jsMtime > rustMtime))) {
+                const { python2, python3, php, phpAsync, rust, className, baseClass } = this.transpileClass (contents)
                 log.cyan ('Transpiling from', filename.yellow)
 
                 ;[
@@ -1184,6 +1580,7 @@ class Transpiler {
                     [ python3Folder, pythonFilename, python3 ],
                     [ phpFolder, phpFilename, php ],
                     [ phpAsyncFolder, phpFilename, phpAsync ],
+                    [ rustFolder, rustFilename, rust ],
                 ].forEach (([ folder, filename, code ]) => {
                     if (folder) {
                         overwriteFile (folder + filename, code)
@@ -1275,6 +1672,7 @@ class Transpiler {
         let python3 = []
         let php = []
         let phpAsync = []
+        let rust = []
         let methodNames = []
 
         for (let i = 0; i < methods.length; i++) {
@@ -1321,12 +1719,23 @@ class Transpiler {
                 .replace (/false/g, 'False')
                 .replace (/true/g, 'True')
 
+            let rustArgs = args.map(x => 'mut ' + x ).map (x => x.includes(' = ')
+                ? x.replace (' = undefined', ': Value')
+                    .replace (' = {}', ': Value')
+                    .replace (' = false', ': Value')
+                    .replace (' = 0', ': Value')
+                    .replace (' = 1', ': Value')
+                    .replace (' = true', ': Value')
+                    .replace (/ = '\w+'/, ': Value')
+                : x + ': Value').map(x => x.replace('type: Value', 'r#type: Value')).join(', ')
+
             // method body without the signature (first line)
             // and without the closing bracket (last line)
             let js = lines.slice (1, -1).join ("\n")
 
             // transpile everything
             let { python3Body, python2Body, phpBody, phpAsyncBody } = this.transpileJavaScriptToPythonAndPHP ({ js, className, variables, removeEmptyLines: true })
+            // let rustBody = this.transpileJavaScriptToRust ({ js, className, variables, removeEmptyLines: true })
 
             // compile the final Python code for the method signature
             let pythonString = 'def ' + method + '(self' + (pythonArgs.length ? ', ' + pythonArgs : '') + '):'
@@ -1351,6 +1760,11 @@ class Transpiler {
             phpAsync.push ('    ' + 'public function ' + method + '(' + phpArgs + ') {');
             phpAsync.push (phpAsyncBody);
             phpAsync.push ('    ' + '}')
+
+            // compile signature + body for Rust
+            // if (methods[i].includes('fetchFundingRate (')) {
+                rust.push(transpileMethodToRust(className, methods[i]));
+            // }
         }
 
         return {
@@ -1359,6 +1773,7 @@ class Transpiler {
             python3,
             php,
             phpAsync,
+            rust,
             methodNames
         }
     }
@@ -1380,14 +1795,17 @@ class Transpiler {
                 python3,
                 php,
                 phpAsync,
+                rust,
             } = this.transpileMethodsToAllLanguages (className, methods)
             const pythonDelimiter = '# ' + delimiter + '\n'
             const phpDelimiter = '// ' + delimiter + '\n'
+            const rustDelimiter = '// ' + delimiter + '\n'
             const restOfFile = '([^\n]*\n)+'
             const python2File = './python/ccxt/base/exchange.py'
             const python3File = './python/ccxt/async_support/base/exchange.py'
             const phpFile = './php/Exchange.php'
             const phpAsyncFile = './php/async/Exchange.php'
+            const rustFile = './rust/src/exchange.rs'
             log.magenta ('→', python2File.yellow)
             replaceInFile (python2File,  new RegExp (pythonDelimiter + restOfFile), pythonDelimiter + python2.join ('\n') + '\n')
             log.magenta ('→', python3File.yellow)
@@ -1396,6 +1814,8 @@ class Transpiler {
             replaceInFile (phpFile,      new RegExp (phpDelimiter + restOfFile),    phpDelimiter + php.join ('\n') + '\n}\n')
             log.magenta ('→', phpAsyncFile.yellow)
             replaceInFile (phpAsyncFile, new RegExp (phpDelimiter + restOfFile),    phpDelimiter + phpAsync.join ('\n') + '\n}\n')
+            log.magenta ('→', rustFile.yellow)
+            replaceInFile (rustFile,  new RegExp (rustDelimiter + restOfFile), rustDelimiter + rust.join ('\n') + '\n')
         }
     }
 
@@ -1875,39 +2295,41 @@ class Transpiler {
             , python3Folder  = './python/ccxt/async_support/'
             , phpFolder      = './php/'
             , phpAsyncFolder = './php/async/'
+            , rustFolder = './rust/src/'
             , options = { python2Folder, python3Folder, phpFolder, phpAsyncFolder }
 
         createFolderRecursively (python2Folder)
         createFolderRecursively (python3Folder)
         createFolderRecursively (phpFolder)
         createFolderRecursively (phpAsyncFolder)
+        createFolderRecursively (rustFolder)
 
         //*
 
         this.transpileBaseMethods ()
 
-        const classes = this.transpileDerivedExchangeFiles ('./js/', options, pattern, force)
+        // const classes = this.transpileDerivedExchangeFiles ('./js/', options, pattern, force)
 
-        if (classes === null) {
-            log.bright.yellow ('0 files transpiled.')
-            return;
-        }
+        // if (classes === null) {
+        //     log.bright.yellow ('0 files transpiled.')
+        //     return;
+        // }
 
-        // HINT: if we're going to support specific class definitions
-        // this process won't work anymore as it will override the definitions
-        this.exportTypeScriptDeclarations (tsFilename, classes)
+        // // HINT: if we're going to support specific class definitions
+        // // this process won't work anymore as it will override the definitions
+        // this.exportTypeScriptDeclarations (tsFilename, classes)
 
-        //*/
+        // //*/
 
-        this.transpileErrorHierarchy ({ tsFilename })
+        // this.transpileErrorHierarchy ({ tsFilename })
 
-        this.transpileTests ()
+        // this.transpileTests ()
 
-        this.transpilePythonAsyncToSync ()
+        // this.transpilePythonAsyncToSync ()
 
-        this.transpilePhpAsyncToSync ()
+        // this.transpilePhpAsyncToSync ()
 
-        this.transpilePhpBaseClassMethods ()
+        // this.transpilePhpBaseClassMethods ()
 
         log.bright.green ('Transpiled successfully.')
     }
