@@ -1,18 +1,40 @@
-"use strict";
-
 const acorn = require('acorn');
 const walk = require('acorn-walk');
-const {
-    unCamelCase,
-    precisionConstants,
-    safeString,
-} = require('../js/base/functions.js');
-const { truncate } = require('../js/base/functions/number.js');
+const { unCamelCase } = require('../js/base/functions.js');
+const camelCase = require('just-camel-case');
+const fs = require('fs');
+const binanceJsFile = './js/binance.js';
+const Exchange = require('.' + binanceJsFile);
 
 var THE_GLOBAL_METHOD;
 
 function isUpperCase(x) {
     return x && x.length > 0 && x[0] === x.toUpperCase()[0];
+}
+
+function capitalizeFirstLetter(l) {
+    return l.charAt(0).toUpperCase() + l.slice(1);
+}
+
+function isUndefined(node) {
+    return node.type === 'Identifier' && node.name === 'undefined';
+}
+
+function uncapitalizeFirstLetter(l) {
+    return l.charAt(0).toLowerCase() + l.slice(1);
+}
+
+function functionIsAsync(node) {
+    if (node.type !== 'FunctionDeclaration') {
+        throw new Error("Unexpected node type");
+    }
+    let rv = false;
+    walk.simple(node, {
+        AwaitExpression(node) {
+            rv = true;
+        }
+    });
+    return rv;
 }
 
 function isAllCaps(x) {
@@ -96,81 +118,164 @@ function getReturnType(node) {
     }
 }
 
-function getArgumentCount(node) {
+let FUNCTION_INFO = {};
+
+function analyzeClassIfNeeded(className, exchange) {
+    if (className in FUNCTION_INFO) {
+        return;
+    }
+
+    const parts = [];
+    const go = (x, k) => {
+        const f = x[k];
+        if (k.startsWith("_") || k === 'defaultFetch' || k === 'default_fetch' || typeof f !== 'function') {
+            return;
+        }
+        const s = f.toString();
+        if (s.includes('[native code]') || s.startsWith('class ')) {
+            return;
+        }
+        // parts.push("/* " + k + " */");
+        const line0 = s.split('\n')[0];
+        if (line0.includes(") {") && line0.startsWith('async ')) {
+            parts.push(`${k}: async function ${s.replace(/^async (function )?/, '')},`);
+        } else if (line0.includes(") {") && !line0.startsWith('function ')) {
+            parts.push(`${k}: function ${s},`);
+        } else {
+            parts.push(`${k}: ${s},`);
+        }
+    }
+
+    if (exchange) {
+        let x = Object.getPrototypeOf(exchange);
+        for (const k of Object.getOwnPropertyNames(x)) {
+            go(x, k);
+        }
+    } else {
+        let x = new Exchange();
+        while (x) {
+            for (const k of Object.getOwnPropertyNames(x)) {
+                go(x, k);
+            }
+            x = Object.getPrototypeOf(x);
+        }
+    }
+
+    // const src = 'class Base {\n' + parts.join('\n') + '\n}';
+    const src = 'var x = {\n' + parts.join('\n') + '\n};';
+    // fs.writeFileSync('/Users/chris/Desktop/wat.js', src);
+    // const src = fs.readFileSync("/Users/chris/Desktop/wat.js");
+    const ast = acorn.parse(src, {
+        ecmaVersion: 2017,
+        allowSuperOutsideMethod: true
+    });
+
+    FUNCTION_INFO[className] = {};
+    walk.recursive(ast, {}, {
+        Property(node) {
+            switch (node.value.type) {
+                case 'FunctionExpression':
+                case 'ArrowFunctionExpression':
+                    if (node.key.type !== 'Identifier') {
+                        throw new Error("Unexpected node type");
+                    }
+
+                    if (!node.value.params.some((x) => x.type === 'RestElement')) {
+                        FUNCTION_INFO[className][node.key.name] = {
+                            paramsCount: node.value.params.filter((x) => !(x.type === 'Identifier' && x.name === '$default')).length,
+                            async: node.value.async,
+                        };
+                    }
+                    break;
+
+                case 'ClassExpression':
+                    break;
+
+                default:
+                    throw new Error("Unexpected node type");
+            }
+        }
+    });
+}
+
+function getArgumentCount(className, node) {
     if (node.type !== 'CallExpression') {
         throw new Error("Unexpected node type");
     }
     const argCounts = {
-        safeValue: 3,
         fetchAccounts: 1,
-        fetchTrades: 4,
-        sign: 6,
-        parseMarketLeverageTiers: 2,
-        parseTransaction: 2,
-        parseTransfer: 2,
-        safeString: 3,
-        safeStringUpper: 3,
-        safeStringLower: 3,
-        parseNumber: 2,
-        sortBy2: 4,
-        safeString2: 4,
-        safeStringLower2: 4,
-        safeStringUpper2: 4,
-        safeMarket: 3,
-        safeNumber: 3,
-        stringDiv: 3,
-        safeInteger: 3,
-        safeCurrencyCode: 2,
-        convertTradingViewToOHLCV: 8,
-        filterByArray: 4,
-        cancelOrder: 3,
-        filterBySymbolSinceLimit: 5,
-        sortBy: 3,
-        safeCurrency: 2,
-
-        decimalToPrecision: 5,
-        numberToString: 1,
-        fetchTrades: 4,
-        parseTicker: 2,
-        filterByValueSinceLimit: 7,
+        fetchBorrowRates: 1,
+        fetchDepositAddresses: 2,
+        fetchTradingLimits: 2,
         parseDepositAddress: 2,
-        parseBorrowInterest: 2,
         parseFundingRateHistory: 2,
-        totp: 1,
-        parseTradingLimits: 3,
-        parseTrade: 2,
+        parseFundingHistory: 2,
         parseLedgerEntry: 2,
         parsePosition: 2,
-        implodeParams: 2,
-        extractParams: 2,
-        fetchTradingLimitsById: 2,
-        filterBySinceLimit: 5,
-        aggregate: 1,
-        parseOrder: 2,
-        iso8601: 1,
-        fetchBorrowRate: 2,
-        loadMarkets: 2,
-        fetchTime: 1,
-        safeStringN: 3,
-        fetchFundingRates: 2,
-        fetchLeverageTiers: 2,
-        buildOHLCVC: 4,
-        fetch: 4,
+        stringDiv: 3,
         throttle: 1,
-        safeTimestamp: 3,
-        fetchDepositAddresses: 2,
-        fetchBorrowRates: 1,
-        fetchOrderBook: 3,
-        fetchTradingLimits: 2,
+        totp: 1,
     };
-    return argCounts[getCalleeFunctionName(node)] ?? node.arguments.length;
+    const fname = getCalleeFunctionName(node);
+    const rv = FUNCTION_INFO[className][fname] || FUNCTION_INFO['Exchange'][fname];
+    if (!rv) {
+        // if (fname in argCounts) {
+        //     console.log(`coulda ${fname}`);
+        // }
+        // console.warn(`Unknown function ${fname}`);
+        return argCounts[fname] || node.arguments.length;
+    }
+    return rv.paramsCount;
+}
+
+function enumerateApiMethodMapping(api, apiName = undefined, method = undefined, keyPrefixes = undefined, pathPrefix = undefined) {
+    const rv = [];
+    for (let [k, v] of Object.entries(api)) {
+        if (!apiName) {
+            Object.assign(rv, enumerateApiMethodMapping(v, k, method, [...(keyPrefixes || []), k], pathPrefix));
+        } else if (!method) {
+            if (['get', 'post', 'put', 'delete'].includes(k.toLowerCase())) {
+                Object.assign(rv, enumerateApiMethodMapping(v, apiName, k, [...(keyPrefixes || []), k], pathPrefix));
+            } else {
+                Object.assign(rv, enumerateApiMethodMapping(v, apiName, undefined, [...(keyPrefixes || []), k], pathPrefix));
+            }
+        } else {
+            if (Array.isArray(api)) {
+                k = v;
+            }
+
+            let k1 = camelCase(k.split('/').map((x) => x.replace("{", "").replace("}", "")).join('_'));
+            if (pathPrefix) {
+                k1 = capitalizeFirstLetter(k1);
+            }
+            rv[camelCase([...(keyPrefixes || []), k1].join('_'))] = {
+                apiName,
+                method,
+                path: (pathPrefix || '') + k
+            };
+        }
+    }
+    return rv;
 }
 
 module.exports = {
-    transpileMethodToRust(className, method) {
+    transpileMethodToRust(className, method, exchange, baseMethodNames) {
+        analyzeClassIfNeeded(className, exchange);
+
+        const api = exchange?.describe().api;
+        const apiMethods = new Set(api ? Object.keys(enumerateApiMethodMapping(api)) : []);
+        const baseClassName = exchange ?
+            Object.getPrototypeOf(Object.getPrototypeOf(exchange)).constructor.name
+            : undefined;
+
         method = method.trim().startsWith('async ') ? method.replace(/^\s*async\s+/, 'async function ') : `function ${method}`;
         THE_GLOBAL_METHOD = method;
-        const ast = acorn.parse(method, { ecmaVersion: 2017 });
+        const comments = [];
+        const ast = acorn.parse(method, {
+            ecmaVersion: 2017,
+            onComment: comments,
+            allowSuperOutsideMethod: true,
+        });
 
         const output = { value: "" };
         let currentOutput = output;
@@ -178,68 +283,6 @@ module.exports = {
         const emit = (x) => {
             currentOutput.value += x;
         };
-
-        // const emitAs = (type, node, state, c) => {
-        //     switch (type) {
-        //         case 'value':
-        //             switch (node.type) {
-        //                 case 'BinaryExpression':
-        //                     emit("(");
-        //                     c(node, asType(state));
-        //                     emit(").into()");
-        //                     break;
-
-        //                 case 'Literal':
-        //                     c(node, asType(state));
-        //                     emit(".into()"); // XXX Probably isn't needed?
-        //                     break;
-
-        //                 default:
-        //                     c(node, asType(state));
-        //                     if (isAllCaps(node.name)) {
-        //                         emit(".into()");
-        //                     } else {
-        //                         emit(".clone()");
-        //                     }
-        //                     break;
-        //             }
-        //             break;
-
-        //         case 'usize':
-        //             switch (node.type) {
-        //                 case 'Literal':
-        //                     c(node, asType(state));
-        //                     break;
-
-        //                 default:
-        //                     c(node, asType(state));
-        //                     emit(".unwrap_json().as_u64().unwrap().into()");
-        //                     break;
-        //             }
-        //             break;
-
-        //         case 'bool':
-        //             switch (node.type) {
-        //                 case 'Literal':
-        //                     c(node, asType(state));
-        //                     break;
-
-        //                 case 'Identifier':
-        //                 case 'CallExpression':
-        //                     c(node, asType(state));
-        //                     emit(".into()");
-        //                     break;
-
-        //                 default:
-        //                     c(node, asType(state));
-        //                     break;
-        //             }
-        //             break;
-
-        //         default:
-        //             throw new Error("Unexpected emitAs type");
-        //     }
-        // };
 
         const asType = (state, type) => ({
             ...state,
@@ -259,31 +302,156 @@ module.exports = {
             emit(' '.repeat(state.indentLevel * state.indentSize));
         }
 
+        const isDispatchCall = (node) => {
+            if (node.type !== 'CallExpression') {
+                throw new Error("Unexpected node type");
+            }
+
+            return node.callee.type === 'MemberExpression' &&
+                node.callee.object.type === 'ThisExpression' &&
+                node.callee.property.type === 'Identifier' &&
+                ((apiMethods.has(node.callee.property.name) && !node.callee.computed) ||
+                    (node.callee.property.name === 'method' && node.callee.computed));
+        };
+
+        const isOverridenMethodCall = (node) => {
+            if (className === 'Exchange') {
+                return false;
+            }
+
+            if (
+                !node.callee.computed && node.callee.type === 'MemberExpression' &&
+                node.callee.object.type === 'ThisExpression' && node.callee.property.type === 'Identifier'
+            ) {
+                const fname = node.callee.property.name;
+
+                if (baseMethodNames && baseMethodNames.includes(fname)) {
+                    return true;
+                }
+
+                return !!FUNCTION_INFO[className][fname];
+            }
+
+            return false;
+        };
+
+        const parseAndEmitDocComment = (comment, state) => {
+            let lines = comment.value.split("\n");
+            lines = lines.slice(1, lines.length - 1);
+            lines = lines.map((l) => l.replace(/{@link ([^}]+)}/g, "($1)"));
+
+            const returns = [];
+            const params = [];
+            const descriptions = [];
+            const otherTags = [];
+            const otherText = [];
+
+            for (const line of lines) {
+                const line1 = line.replace(/^\s*\*\s*/g, '');
+                if (line1.includes("@method") || line1.includes("@name")) {
+                    // ignore
+                } else if (line1.includes("@return")) {
+                    returns.push(line1);
+                } else if (line1.includes("@param")) {
+                    params.push(line1);
+                } else if (line1.includes("@description")) {
+                    descriptions.push(line1);
+                } else if (line1.includes("@ignore")) {
+                    otherTags.push(line1);
+                } else {
+                    otherText.push(line1);
+                }
+            }
+
+            if (returns.length > 0) {
+                indent(state);
+                emit("/// Returns " + returns.map((x) => uncapitalizeFirstLetter(x.replace("@returns ", "").replace("@return ", "").replace(/{[\w|\[\]]+} /, ''))).join("; "));
+                emit("\n");
+
+                indent(state);
+                emit("///\n")
+            }
+
+            for (const line of otherTags) {
+                indent(state);
+                emit(`/// ${line}\n`);
+            }
+
+            for (const line of descriptions) {
+                indent(state);
+                emit(`/// ${capitalizeFirstLetter(line.replace("@description ", ""))}\n`);
+            }
+
+            for (const line of otherText) {
+                indent(state);
+                emit(`/// ${line}\n`);
+            }
+
+            if (params.length > 0) {
+                indent(state);
+                emit("///\n");
+                indent(state);
+                emit("/// # Arguments\n");
+                indent(state);
+                emit("///\n");
+                for (const line of params) {
+                    indent(state);
+                    const line1 = line.replace("@param ", "");
+                    const words = line1.split(' ');
+                    const paramType = words.shift();
+                    const paramName = words.shift();
+                    emit('/// * `' + paramName + '` ' + paramType + ' - ' + words.join(' ') + "\n");
+                }
+            }
+        };
+
+        // Since we're just transpiling function by function we assume the var
+        // type don't change and we don't track scope, etc.
+        const varTypes = {};
+
+        const inferType = (node) => {
+            switch (node.type) {
+                case 'Identifier':
+                    return varTypes[node.name];
+
+                case 'MemberExpression':
+                    if (!node.computed && node.property.type === 'Identifier' && node.property.name === 'length') {
+                        return 'usize'
+                    }
+                    return undefined;
+
+                default:
+                    return undefined;
+            }
+        };
+
         walk.recursive(ast, {
             indentLevel: 1,
             indentSize: 4,
             asType: undefined
         }, {
             FunctionDeclaration(node, state, c) {
+                if (comments[0] && comments[0].type === 'Block' && (comments[0].value.includes('@method') || comments[0].value.includes('@param'))) {
+                    parseAndEmitDocComment(comments[0], state);
+                    comments.shift();
+                }
+
                 const params = [];
                 const defaultValues = {};
                 for (const param of node.params) {
                     switch (param.type) {
                         case 'Identifier':
-                            switch (param.name) {
-                                case 'type':
-                                    params.push('r#type');
-                                    break;
-                                default:
-                                    params.push(unCamelCamelCase(param.name));
-                                    break;
+                            params.push(transformIdentifier(param.name));
+                            break;
+
+                        case 'AssignmentPattern':
+                            const n = transformIdentifier(param.left.name);
+                            params.push(n);
+                            if (!isUndefined(param.right)) {
+                                defaultValues[n] = param.right;
                             }
                             break;
-                        case 'AssignmentPattern':
-                            const n = unCamelCamelCase(param.left.name);
-                            params.push(n);
-                            defaultValues[n] = param.right.value;
-                            break;
+
                         default:
                             throw new Error('Unsupported parameter type: ' + param.type);
                     }
@@ -292,34 +460,74 @@ module.exports = {
                 indent(state);
                 let retType = 'Value';
                 const fname = node.id.name;
-                const isAsync = fname.startsWith('fetch') ||
-                    fname.startsWith('load') || // Walk the AST to find out if the function is async
-                    fname.startsWith('edit') ||
-                    fname.startsWith('create') ||
-                    fname.startsWith('cancel') ||
-                    fname === 'request';
-                let isSelfImmutable = fname.startsWith('safe');
-                if (fname === 'safeOrder' || fname === 'safeTrade') {
-                    isSelfImmutable = false;
-                }
-                if (fname === 'commonCurrencyCode' || fname === 'parseAccount' || fname === 'market') {
+                const isAsync = node.async;
+                // let isAsync = fname.startsWith('fetch') ||
+                //     fname.startsWith('load') || // Still need to hardcode these because the base implementation is just `todo!()`
+                //     fname.startsWith('edit') ||
+                //     fname.startsWith('create') ||
+                //     fname.startsWith('cancel') ||
+                //     fname === 'request' ||
+                //     node.async;
+                // functionIsAsync(node);
+                let isSelfImmutable = false;
+                if (
+                    fname.startsWith('safe') ||
+                    fname.startsWith('parse') || fname.startsWith('filter') || fname === 'marketSymbols' || fname.startsWith('convert') ||
+                    fname === 'commonCurrencyCode' || fname === 'market' || fname === 'getSupportedMapping' ||
+                    fname === 'describe' || fname === 'nonce' || fname === 'symbol' || fname === 'account' || fname === 'currency'
+                ) {
                     isSelfImmutable = true;
+                }
+
+                // It's just because safeOrder sets `number` -- try to just byparse it I guess
+                if (
+                    fname === 'safeOrder' || fname === 'safeTrade' || fname === 'parseTrade' || fname === 'parseOrder' ||
+                    fname === 'parseTrades' || fname === 'parseOrders'
+                ) {
+                    isSelfImmutable = false;
                 }
 
                 if (fname.startsWith('throw')) {
                     retType = '()';
                 }
-                emit(`${isAsync ? 'async ' : ''}fn ${unCamelCamelCase(fname)} (&${isSelfImmutable ? '' : 'mut '}self, ${params.map((x) => `mut ${x}: Value`).join(', ')}) -> ${retType} `);
 
-                if (node.body.body.length === 0) {
+                if (fname === 'describe') {
+                    emit("fn describe(&self) -> Value {\n");
+                    indent({
+                        ...state,
+                        indentLevel: state.indentLevel + 1
+                    });
+                    emit(`Value::Json(serde_json::Value::from_str(r###"`);
+                    emit(JSON.stringify(exchange.describe(), null, 4).split("\n").join("\n" + " ".repeat(state.indentSize * (state.indentLevel + 1))));
+                    emit(`"###).unwrap())\n`);
+                    indent(state);
+                    emit("}");
+                    return;
+                }
+
+                emit(`${isAsync ? 'async ' : ''}fn ${unCamelCamelCase(fname)}(&${isSelfImmutable ? '' : 'mut '}self`)
+                if (params.length > 0) {
+                    emit(", ");
+                    emit(`${params.map((x) => `mut ${x}: Value`).join(', ')}`)
+                }
+                emit(`) -> ${retType} `);
+
+                if (node.body.body.length === 0 && retType === 'Value') {
                     emit("{ Value::Undefined }");
                 } else {
+                    let appendBlock = undefined;
+                    if (retType === 'Value' && node.body.body.length > 0 && node.body.body[node.body.body.length - 1].type !== 'ReturnStatement') {
+                        appendBlock = "Value::Undefined";
+                    }
                     c(node.body, asType({
                         ...state,
+                        defaultValues,
                         functionName: fname,
-                        indentLevel: state.indentLevel + 1
+                        indentLevel: state.indentLevel + 1,
+                        appendBlock
                     }));
                 }
+
             },
 
             BlockStatement(node, state, c) {
@@ -327,7 +535,49 @@ module.exports = {
                 const appendBlock = state.appendBlock;
                 state.appendBlock = undefined;
 
+                if (state.defaultValues) {
+                    for (const [name, value] of Object.entries(state.defaultValues)) {
+                        indent(state);
+                        emit(`${name} = ${name}.or_default(`);
+                        c(value, asType(state, 'value'));
+                        emit(");\n");
+                    }
+                }
+
+                state = {
+                    ...state,
+                    defaultValues: undefined
+                };
+
                 for (const stmt of node.body) {
+                    while (comments[0] && comments[0].start < stmt.start) {
+                        switch (comments[0].type) {
+                            case 'Line':
+                                indent(state);
+                                emit("//");
+                                emit(comments[0].value);
+                                emit("\n");
+                                comments.shift();
+                                break;
+
+                            case 'Block':
+                                indent(state);
+                                emit("/*");
+                                const lines = comments[0].value.split('\n');
+                                for (let i = 0; i < lines.length; i++) {
+                                    emit(lines[i]);
+                                    if (i < lines.length - 1) {
+                                        emit("\n");
+                                    }
+                                }
+                                emit("*/\n");
+                                comments.shift();
+                                break;
+
+                            default:
+                                throw new Error('Unsupported comment type: ' + comments[0].type);
+                        }
+                    }
                     indent(state);
                     c(stmt, asType(state));
                     emit(";\n");
@@ -401,9 +651,9 @@ module.exports = {
                 }
 
                 if (node.left.type === 'MemberExpression') {
-                    if (node.left.property.type !== 'Identifier' && node.left.property.type !== 'Literal' && node.left.property.type !== 'MemberExpression') {
-                        throw new Error("Unexpected MemberExpression");
-                    }
+                    // if (node.left.property.type !== 'Identifier' && node.left.property.type !== 'Literal' && node.left.property.type !== 'MemberExpression') {
+                    //     throw new Error("Unexpected MemberExpression");
+                    // }
 
                     c(node.left.object, asType(state));
                     emit(".set(")
@@ -435,7 +685,22 @@ module.exports = {
                     return;
                 }
 
-                c(node.left, asType(state));
+                let destructure = 0;
+                if (node.left.type === 'ArrayPattern') {
+                    destructure = node.left.elements.length;
+                    emit("(");
+                    for (let i = 0; i < node.left.elements.length; i++) {
+                        const el = node.left.elements[i];
+                        c(el, asType(state));
+                        if (i < node.left.elements.length - 1) {
+                            emit(", ");
+                        }
+                    }
+                    emit(")");
+                } else {
+                    c(node.left, asType(state));
+                }
+
                 emit(' ');
 
                 switch (node.operator) {
@@ -472,29 +737,13 @@ module.exports = {
                 }
                 emit(' ');
 
-                c(node.right, asType(state, 'value'));
-
-                // switch (node.right.type) {
-                //     case 'LogicalExpression':
-                //         emit('(');
-                //         c(node.right, state);
-                //         emit(').into()');
-                //         break;
-
-                //     case 'Literal':
-                //         c(node.right, state);
-                //         emit(".into()");
-                //         break;
-
-                //     case 'Identifier':
-                //         c(node.right, state);
-                //         emit(".clone()");
-                //         break;
-
-                //     default:
-                //         c(node.right, state);
-                //         break;
-                // }
+                if (destructure > 0) {
+                    emit(`shift_${destructure}(`)
+                    c(node.right, asType(state, 'value'));
+                    emit(")");
+                } else {
+                    c(node.right, asType(state, 'value'));
+                }
             },
 
             VariableDeclaration(node, state, c) {
@@ -504,36 +753,74 @@ module.exports = {
             },
 
             VariableDeclarator(node, state, c) {
-                let ident;
-                switch (node.id.name) {
-                    case 'type':
-                        ident = 'r#type';
+                switch (node.id.type) {
+                    case 'Identifier':
+                        const ident = transformIdentifier(node.id.name);
+                        if (state.parent?.type === 'ForStatement') {
+                            emit(`let mut ${ident}: usize = `);
+                            c(node.init, asType(state, 'usize'));
+                            varTypes[ident] = 'usize';
+                        } else {
+                            emit(`let mut ${ident}: Value = `);
+                            c(node.init, asType(state, 'value'));
+                            varTypes[ident] = 'value';
+                        }
                         break;
+
+                    case 'ArrayPattern':
+                        emit("let (");
+                        for (let i = 0; i < node.id.elements.length; i++) {
+                            const el = node.id.elements[i];
+                            emit("mut ")
+                            c(el, asType(state));
+                            if (i < node.id.elements.length - 1) {
+                                emit(", ");
+                            }
+                        }
+                        emit(") = ");
+                        emit("shift_2(")
+                        c(node.init, asType(state, 'value'));
+                        emit(")");
+                        break;
+
                     default:
-                        ident = unCamelCamelCase(node.id.name);
-                        break;
-                };
-                if (state.parent?.type === 'ForStatement') {
-                    emit(`let mut ${ident}: usize = `);
-                    c(node.init, asType(state, 'usize'));
-                } else {
-                    emit(`let mut ${ident}: Value = `);
-                    c(node.init, asType(state, 'value'));
+                        throw new Error("Unexpected VariableDeclarator");
                 }
             },
 
             Literal(node, state, c) {
                 switch (typeof node.value) {
                     case 'number':
-                        emit(node.value.toString());
                         switch (state.asType) {
                             case undefined:
                             case 'usize':
                                 break;
 
                             case 'property':
+                            case 'rvalue':
                             case 'value':
-                                emit(".into()");
+                                // emit(".into()");
+                                emit("Value::from(");
+                                break;
+
+                            default:
+                                throw new Error("Unexpected literal type");
+                        }
+                        emit(node.value.toString());
+
+                        if (node.value < -2147483648 || node.value > 2147483647) {
+                            emit("i64");
+                        }
+
+                        switch (state.asType) {
+                            case undefined:
+                            case 'usize':
+                                break;
+
+                            case 'property':
+                            case 'rvalue':
+                            case 'value':
+                                emit(")");
                                 break;
 
                             default:
@@ -547,6 +834,7 @@ module.exports = {
                                 break;
 
                             case 'value':
+                            case 'rvalue':
                             case 'property':
                                 emit("Value::from(");
                                 break;
@@ -560,6 +848,7 @@ module.exports = {
                                 break;
 
                             case 'value':
+                            case 'rvalue':
                             case 'property':
                                 emit(")");
                                 break;
@@ -576,12 +865,21 @@ module.exports = {
                             case 'bool':
                                 break;
 
+                            case 'rvalue':
                             case 'value':
                                 emit(".into()");
                                 break;
 
                             default:
                                 throw new Error("Unexpected literal type");
+                        }
+                        break;
+
+                    case 'object':
+                        if (node.value === null) {
+                            emit("Value::null()");
+                        } else {
+                            throw new Error("Unexpected literal type");
                         }
                         break;
 
@@ -592,10 +890,10 @@ module.exports = {
 
             ConditionalExpression(node, state, c) {
                 emit("if ");
-                c(node.test, asType(state));
-                if (node.test.type !== 'BinaryExpression') {
-                    emit(".is_truthy()");
-                }
+                c(node.test, asType(state, 'bool'));
+                // if (node.test.type !== 'BinaryExpression') {
+                //     emit(".is_truthy()");
+                // }
                 emit(" { ");
                 c(node.consequent, asType(state, 'value'));
                 emit(" } else { ");
@@ -641,26 +939,17 @@ module.exports = {
                         emit(".typeof_()");
                         break;
 
+                    case '-':
+                        c(node.argument, asType(state, 'value'));
+                        emit(".neg()");
+                        break;
+
                     default:
                         throw new Error("Unexpected unary operator");
                 }
             },
 
             IfStatement(node, state, c) {
-                // if (node.test.type === 'Identifier' || node.test.type === 'MemberExpression' || node.test.type === 'UnaryExpression') {
-                //     emit('if (');
-                //     c(node.test, state);
-                //     if (node.test.type === 'UnaryExpression' && node.test.operator === '!') {
-                //         emit(").is_falsy() ");
-                //     } else {
-                //         emit(").is_truthy() ");
-                //     }
-                // } else {
-                //     emit('if ');
-                //     c(node.test, state);
-                //     emit(" ");
-                // }
-
                 emit("if ");
                 c(node.test, asType(state, 'bool'));
                 emit(" ");
@@ -690,6 +979,7 @@ module.exports = {
                     case '&&':
                     case '||':
                         switch (state.asType) {
+                            case 'rvalue':
                             case 'value':
                                 emit("(");
                                 break;
@@ -709,6 +999,7 @@ module.exports = {
                         c(node.right, asType(state, 'bool'));
 
                         switch (state.asType) {
+                            case 'rvalue':
                             case 'value':
                                 emit(").into()");
                                 break;
@@ -728,21 +1019,6 @@ module.exports = {
             },
 
             BinaryExpression(node, state, c) {
-                // const leftIsUndefined = node.left.type === 'Identifier' && node.left.name === 'undefined';
-                // const rightIsUndefined = node.right.type === 'Identifier' && node.right.name === 'undefined';
-
-                // if (leftIsUndefined) {
-                //     c(node.right, state);
-                //     emit(".is_undefined()");
-                //     return;
-                // }
-
-                // if (rightIsUndefined) {
-                //     c(node.left, state);
-                //     emit(".is_undefined()");
-                //     return;
-                // }
-
                 switch (node.operator) {
                     case 'in':
                         c(node.right, asType(state));
@@ -774,7 +1050,8 @@ module.exports = {
                         if (state.asType === 'value') {
                             emit("(");
                         }
-                        c(node.left, asType(state, 'value'));
+                        const desiredExpressionType = inferType(node.left) || 'value';
+                        c(node.left, asType(state, desiredExpressionType));
                         emit(" ");
                         if (node.operator === '===') {
                             emit("==");
@@ -784,7 +1061,7 @@ module.exports = {
                             emit(node.operator);
                         }
                         emit(" ");
-                        c(node.right, asType(state, 'value'));
+                        c(node.right, asType(state, desiredExpressionType));
                         if (state.asType === 'value') {
                             emit(").into()");
                         }
@@ -794,6 +1071,7 @@ module.exports = {
                     case "-":
                     case "*":
                     case "/":
+                    case "%":
                         c(node.left, asType(state, 'value'));
                         emit(" ");
                         emit(node.operator);
@@ -807,7 +1085,7 @@ module.exports = {
             },
 
             CallExpression(node, state, c) {
-                const argCounts = getArgumentCount(node);
+                let argCounts = getArgumentCount(className, node);
                 const retType = getReturnType(node);
                 let shouldAwait = state.awaited;
 
@@ -816,11 +1094,39 @@ module.exports = {
                     awaited: undefined
                 };
 
-                c(node.callee, asType({
-                    ...state,
-                    parent: node
-                }));
-                emit("(");
+                if (isDispatchCall(node)) {
+                    if (node.callee.property.name === 'method' && node.callee.computed) {
+                        emit(`${capitalizeFirstLetter(className)}::dispatch(self, ` + node.callee.property.name + `, `);
+                    } else {
+                        emit(`${capitalizeFirstLetter(className)}::dispatch(self, "` + node.callee.property.name + `".into(), `);
+                    }
+                    argCounts = 2;
+                } else {
+                    if (isOverridenMethodCall(node)) {
+                        emit(capitalizeFirstLetter(className) + "::");
+                        c(node.callee.property, asType({
+                            ...state,
+                            parent: node
+                        }));
+                        emit("(self")
+                        if (argCounts > 0) {
+                            emit(", ");
+                        }
+                    } else {
+                        c(node.callee, asType({
+                            ...state,
+                            parent: node
+                        }));
+                        emit("(");
+
+                        if (node.callee.type === 'MemberExpression' && node.callee.object.type === 'Super') {
+                            emit("self");
+                            if (argCounts > 0) {
+                                emit(", ");
+                            }
+                        }
+                    }
+                }
                 for (let i = 0; i < argCounts; i++) {
                     const arg = node.arguments[i];
                     if (!arg) {
@@ -885,6 +1191,7 @@ module.exports = {
                     emit(".");
                     c(node.property, asType(state, 'member'));
                     switch (state.asType) {
+                        case 'usize':
                         case undefined:
                             break;
 
@@ -892,18 +1199,25 @@ module.exports = {
                             emit(".into()");
                             break;
 
+                        case 'bool':
+                            emit(" > 0");
+                            break;
+
                         default:
                             throw new Error("Unexpected asType");
                     }
-                } else if (node.property.type === 'Identifier' && (node.property.name === 'i' || node.property.name === 'j')) {
+                } else if (node.property.type === 'Identifier' && varTypes[node.property.name] === 'usize') {
                     c(node.object, asType(state));
                     emit(".get(");
                     c(node.property, asType(state));
                     emit(".into())");
                 } else if (state.parent?.type === 'CallExpression' && node.property.type === 'Identifier' && node.property.name === 'extend') {
-                    if (state.parent.arguments.length === 2) {
+                    if (state.parent.arguments.length === 1) {
                         c(node.object, asType(state));
-                        emit(".extend_2");
+                        emit(".extend_1");
+                    } else if (state.parent.arguments.length === 2) {
+                        // c(node.object, asType(state));
+                        emit("extend_2");
                     } else if (state.parent.arguments.length === 4) {
                         throw new Error('Unsupported extend call');
                         c(node.object, asType(state));
@@ -915,6 +1229,9 @@ module.exports = {
                     if (state.parent.arguments.length === 2) {
                         c(node.object, asType(state));
                         emit(".deep_extend_2");
+                    } else if (state.parent.arguments.length === 3) {
+                        c(node.object, asType(state));
+                        emit(".deep_extend_3");
                     } else if (state.parent.arguments.length === 4) {
                         c(node.object, asType(state));
                         emit(".deep_extend_4");
@@ -923,6 +1240,10 @@ module.exports = {
                     }
                 } else {
                     if (node.object.type === 'Identifier' && isUpperCase(node.object.name)) {
+                        c(node.object, asType(state));
+                        emit("::");
+                        c(node.property, asType(state));
+                    } else if (node.object.type === 'Super') {
                         c(node.object, asType(state));
                         emit("::");
                         c(node.property, asType(state));
@@ -939,6 +1260,7 @@ module.exports = {
                                     break;
 
                                 case 'value':
+                                case 'rvalue':
                                 case undefined:
                                     break;
 
@@ -992,15 +1314,19 @@ module.exports = {
 
                     default:
                         if (isAllCaps(node.name)) {
-                            emit(node.name);
-                            switch (state.asType) {
-                                case undefined:
-                                case 'value':
-                                    emit(".into()");
-                                    break;
+                            if (node.name === 'JSON') {
+                                emit(node.name);
+                            } else {
+                                emit(node.name);
+                                switch (state.asType) {
+                                    case undefined:
+                                    case 'value':
+                                        emit(".into()");
+                                        break;
 
-                                default:
-                                    throw new Error(`Unsupported type ${state.asType}`);
+                                    default:
+                                        throw new Error(`Unsupported type ${state.asType}`);
+                                }
                             }
                         } else {
                             switch (state.asType) {
@@ -1011,6 +1337,7 @@ module.exports = {
                                 case undefined:
                                 case 'bool':
                                 case 'rvalue':
+                                case 'usize':
                                 case 'value':
                                 case 'member':
                                     break;
@@ -1019,31 +1346,36 @@ module.exports = {
                                     throw new Error(`Unsupported type ${state.asType}`);
                             }
                             let isValueType = false;
-                            switch (node.name) {
-                                case 'i':
-                                case 'j':
-                                    if (state.asType === 'value') {
-                                        emit("Value::from(");
-                                    }
-                                    emit(node.name);
-                                    isValueType = true;
-                                    break;
+                            if (varTypes[node.name] === 'usize') {
+                                if (state.asType === 'value') {
+                                    emit("Value::from(");
+                                }
+                                emit(node.name);
+                                isValueType = true;
+                            } else {
+                                switch (node.name) {
+                                    case 'length':
+                                        if (state.asType === 'value') {
+                                            emit("Value::from(");
+                                        }
+                                        emit('len()');
+                                        isValueType = true;
+                                        break;
 
-                                case 'length':
-                                    if (state.asType === 'value') {
-                                        emit("Value::from(");
-                                    }
-                                    emit('len()');
-                                    isValueType = true;
-                                    break;
-
-                                default:
-                                    emit(transformIdentifier(node.name));
-                                    break;
+                                    default:
+                                        emit(transformIdentifier(node.name));
+                                        break;
+                                }
                             }
                             switch (state.asType) {
                                 case 'property':
                                     emit('".into()');
+                                    break;
+
+                                case 'usize':
+                                    if (varTypes[node.name] !== 'usize') {
+                                        emit(".clone().into()");
+                                    }
                                     break;
 
                                 case 'bool':
@@ -1072,7 +1404,11 @@ module.exports = {
 
             ReturnStatement(node, state, c) {
                 emit("return ");
-                c(node.argument, asType(state, 'value'));
+                if (node.argument) {
+                    c(node.argument, asType(state, 'value'));
+                } else {
+                    emit("Value::Undefined");
+                }
             },
 
             UpdateExpression(node, state, c) {
@@ -1116,7 +1452,7 @@ module.exports = {
                 emit(";\n");
                 indent(state);
                 emit("while ");
-                c(node.test, asType(state));
+                c(node.test, asType(state, 'bool'));
                 emit(" ");
 
                 const updateOutput = withNewOutput(node.update, state, c);
@@ -1127,8 +1463,21 @@ module.exports = {
                 }));
             },
 
+            WhileStatement(node, state, c) {
+                emit("while ");
+                c(node.test, asType(state, 'bool'));
+                c(node.body, asType({
+                    ...state,
+                    indentLevel: state.indentLevel + 1,
+                }));
+            },
+
             ContinueStatement(node, state, c) {
                 emit("continue");
+            },
+
+            BreakStatement(node, state, c) {
+                emit("break");
             },
 
             ObjectExpression(node, state, c) {
@@ -1137,7 +1486,15 @@ module.exports = {
                     return;
                 }
 
-                emit("Value::Json(json!({");
+                // if (node.end - node.start > 1000) {
+                //     throw new 
+                //     emit(`Value::Json(serde_json::Value::from_str(r###"`);
+                //     emit(method.slice(node.start, node.end));
+                //     emit(`"###).unwrap())`);
+                //     return;
+                // }
+
+                emit("Value::Json(normalize(&Value::Json(json!({");
                 emit("\n");
                 const state1 = asType({
                     ...state,
@@ -1149,7 +1506,7 @@ module.exports = {
                         case 'Property':
                             indent(state1);
                             emit(`"${node1.key.value}": `);
-                            c(node1.value, asType(state));
+                            c(node1.value, asType(state1));
                             if (i < node.properties.length - 1) {
                                 emit(`,\n`);
                             }
@@ -1160,7 +1517,28 @@ module.exports = {
                 }
                 emit("\n");
                 indent(state);
-                emit("}))");
+                emit("}))).unwrap())");
+            },
+
+            Super(node, state, c) {
+                if (!baseClassName) {
+                    throw new Error("Super not allowed here");
+                }
+                emit(baseClassName);
+            },
+
+            TryStatement(node, state, c) {
+                // TODO Not really done
+                // const state1 = { ...state, indentLevel: state.indentLevel + 1 };
+                // const state2 = { ...state, indentLevel: state.indentLevel + 2 };
+                // indent(state);
+                c(node.block, asType(state));
+                if (node.finalizer) {
+                    // emit("finally! {");
+
+                    c(node.finalizer, asType(state));
+                    // emit("}\n");
+                }
             },
 
             Program(node, state, c) {
@@ -1171,5 +1549,25 @@ module.exports = {
         }, {});
 
         return currentOutput.value + "\n";
+    },
+
+    generateRustDispatchFunction(className, exchange) {
+        const capitalizedClassName = className.charAt(0).toUpperCase() + className.slice(1);
+        const apiMethods = enumerateApiMethodMapping(exchange.api);
+        const bodyParts = [`
+async fn dispatch(&mut self, method: Value, params: Value, context: Value) -> Value {
+    match method {
+        Value::Json(serde_json::Value::String(ref m)) => {
+            match m.as_ref() {`];
+        for (const [k, v] of Object.entries(apiMethods)) {
+            bodyParts.push(`                "${k}" => ${capitalizedClassName}::request(self, "${v.path}".into(), "${v.apiName}".into(), "${v.method.toUpperCase()}".into(), params, Value::Undefined, Value::Undefined, Value::Undefined, context).await,`);
+        }
+        bodyParts.push(`                _ => unimplemented!(),
+            }
+        },
+        _ => unimplemented!()
+    }
+}`);
+        return bodyParts.map((part) => part.split("\n").map((l) => `    ${l}`).join("\n")).join("\n");
     }
 }
