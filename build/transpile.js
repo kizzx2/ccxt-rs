@@ -6,8 +6,6 @@
 
 const { transpileMethodToRust, generateRustDispatchFunction } = require('./transpile-rust.js');
 
-var BIG_COUNTER = 0;
-
 const fs = require ('fs')
     , log = require ('ololog').unlimited
     , _ = require ('ansicolor').nice
@@ -853,6 +851,8 @@ class Transpiler {
             `impl ${capitalizedClassName} for ${capitalizedClassName}Impl {}`,
             `impl ValueTrait for ${capitalizedClassName}Impl {
     fn is_undefined(&self) -> bool { self.0.is_undefined() }
+    fn is_nullish(&self) -> bool { self.0.is_nullish() }
+    fn is_nonnullish(&self) -> bool { self.0.is_nonnullish() }
     fn is_truthy(&self) -> bool { self.0.is_truthy() }
     fn or_default(&self, default: Value) -> Value { self.0.or_default(default) }
     fn is_number(&self) -> bool { self.0.is_number() }
@@ -884,8 +884,11 @@ class Transpiler {
 }`,
             '',
             `impl ${capitalizedClassName}Impl {`,
-            `    pub fn new() -> Self {`,
-            `        let mut rv = ${capitalizedClassName}Impl(Value::new_object());`,
+            `    pub fn new(params: Value) -> Self {`,
+            `        let mut rv = ${capitalizedClassName}Impl(match params {`,
+            `            Value::Json(_) => params,`,
+            `            _ => Value::new_object()`,
+            `        });`,
             `        ExchangeImpl::init(&mut rv.0);`,
             ``,
             `        let config_entries = ${capitalizedClassName}::describe(&rv);`,
@@ -1293,12 +1296,6 @@ class Transpiler {
             const phpAsyncMtime = phpAsyncFolder ? (fs.existsSync (phpAsyncPath) ? fs.statSync (phpAsyncPath).mtime.getTime () : 0) : undefined
             const phpMtime      = phpPath        ? (fs.existsSync (phpPath)      ? fs.statSync (phpPath).mtime.getTime ()      : 0) : undefined
             const rustMtime      = rustPath        ? (fs.existsSync (rustPath)      ? fs.statSync (rustPath).mtime.getTime ()      : 0) : undefined
-
-            if (filename !== 'gate.js' && filename !== 'binance.js') {
-                const [ _, className, baseClass ] = this.getClassDeclarationMatches (contents)
-                log.green ('Already transpiled', filename.yellow)
-                return { className, baseClass }
-            }
 
             if (force ||
                 (python3Folder  && (jsMtime > python3Mtime))  ||
@@ -2078,21 +2075,21 @@ class Transpiler {
             return;
         }
 
-        // // HINT: if we're going to support specific class definitions
-        // // this process won't work anymore as it will override the definitions
-        // this.exportTypeScriptDeclarations (tsFilename, classes)
+        // HINT: if we're going to support specific class definitions
+        // this process won't work anymore as it will override the definitions
+        this.exportTypeScriptDeclarations (tsFilename, classes)
 
-        // //*/
+        //*/
 
-        // this.transpileErrorHierarchy ({ tsFilename })
+        this.transpileErrorHierarchy ({ tsFilename })
 
-        // this.transpileTests ()
+        this.transpileTests ()
 
-        // this.transpilePythonAsyncToSync ()
+        this.transpilePythonAsyncToSync ()
 
-        // this.transpilePhpAsyncToSync ()
+        this.transpilePhpAsyncToSync ()
 
-        // this.transpilePhpBaseClassMethods ()
+        this.transpilePhpBaseClassMethods ()
 
         log.bright.green ('Transpiled successfully.')
     }

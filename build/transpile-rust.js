@@ -2,11 +2,8 @@ const acorn = require('acorn');
 const walk = require('acorn-walk');
 const { unCamelCase } = require('../js/base/functions.js');
 const camelCase = require('just-camel-case');
-const fs = require('fs');
 const binanceJsFile = './js/binance.js';
 const Exchange = require('.' + binanceJsFile);
-
-var THE_GLOBAL_METHOD;
 
 function isUpperCase(x) {
     return x && x.length > 0 && x[0] === x.toUpperCase()[0];
@@ -269,7 +266,6 @@ module.exports = {
             : undefined;
 
         method = method.trim().startsWith('async ') ? method.replace(/^\s*async\s+/, 'async function ') : `function ${method}`;
-        THE_GLOBAL_METHOD = method;
         const comments = [];
         const ast = acorn.parse(method, {
             ecmaVersion: 2017,
@@ -415,7 +411,7 @@ module.exports = {
                     return varTypes[node.name];
 
                 case 'MemberExpression':
-                    if (!node.computed && node.property.type === 'Identifier' && node.property.name === 'length') {
+                    if (!node.computed && node.property.type === 'Identifier' && node.property.name.toLowerCase().endsWith('length')) {
                         return 'usize'
                     }
                     return undefined;
@@ -1052,16 +1048,28 @@ module.exports = {
                         }
                         const desiredExpressionType = inferType(node.left) || 'value';
                         c(node.left, asType(state, desiredExpressionType));
-                        emit(" ");
-                        if (node.operator === '===') {
-                            emit("==");
-                        } else if (node.operator === '!==') {
-                            emit("!=");
+                        if ((node.operator === '===' || node.operator === '==' ||
+                            node.operator === '!==' || node.operator === '!=') &&
+                            node.right.name === 'undefined'
+                        ) {
+                            if (node.operator === '===' || node.operator === '==') {
+                                emit(".is_nullish()");
+                            } else {
+                                emit(".is_nonnullish()");
+                            }
                         } else {
-                            emit(node.operator);
+                            emit(" ");
+                            if (node.operator === '===') {
+                                emit("==");
+                            } else if (node.operator === '!==') {
+                                emit("!=");
+                            } else {
+                                emit(node.operator);
+                            }
+                            emit(" ");
+                            c(node.right, asType(state, desiredExpressionType));
                         }
-                        emit(" ");
-                        c(node.right, asType(state, desiredExpressionType));
+
                         if (state.asType === 'value') {
                             emit(").into()");
                         }
@@ -1170,7 +1178,11 @@ module.exports = {
                 if ((node.property.type === 'Literal') || (node.object.type === 'ThisExpression' && state.parent?.type !== 'CallExpression')) {
                     c(node.object, asType(state));
                     emit(`.get(`)
-                    c(node.property, asType(state, 'property'));
+                    if (node.computed && node.property.type === 'Identifier') {
+                        c(node.property, asType(state, 'rvalue'));
+                    } else {
+                        c(node.property, asType(state, 'property'));
+                    }
                     emit(`)`);
 
                     switch (state.asType) {
@@ -1181,6 +1193,10 @@ module.exports = {
 
                         case 'bool':
                             emit(".is_truthy()");
+                            break;
+
+                        case 'usize':
+                            emit(".into()");
                             break;
 
                         default:
@@ -1360,6 +1376,10 @@ module.exports = {
                                         }
                                         emit('len()');
                                         isValueType = true;
+                                        break;
+
+                                    case 'apiKey':
+                                        emit(node.name);
                                         break;
 
                                     default:
