@@ -2,7 +2,9 @@
 
 A transpilation of the CCXT library into Rust proper parsing.
 
-This is a proof of concept and **work in progress**, `fetch_balance`, `fetch_order_book` and `create_order` have been tested to work with Binance:
+This is a proof of concept and **work in progress**, `fetch_balance`, `fetch_order_book` and `create_order` have been tested to work with Binance.
+
+If you want to use this, check out the repository and then put the `rust` directory into your project.
 
 ### Example usage
 
