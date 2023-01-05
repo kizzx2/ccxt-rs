@@ -4,7 +4,11 @@ A transpilation of the CCXT library into Rust with proper parsing.
 
 This is a proof of concept and **work in progress**, `fetch_balance`, `fetch_order_book` and `create_order` have been tested to work with Binance.
 
-If you want to use this, check out the repository and then put the `rust` directory into your project.
+The `rust` diredctory has been put into a separate repository for easy inclusion into `Cargo.toml`, you can use it like this:
+
+```
+ccxt = { git = "https://github.com/kizzx2/ccxt-rs-lib" }
+```
 
 ### Help wanted
 
